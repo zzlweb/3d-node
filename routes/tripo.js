@@ -4,25 +4,28 @@ const multer = require('multer');
 const FormData = require('form-data');
 const fs = require('fs');
 const axios = require('axios');
-// 配置 multer
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    // 确保上传目录存在
-    if (!fs.existsSync('uploads')) {
-      fs.mkdirSync('uploads', { recursive: true });
-    }
-    cb(null, 'uploads/');
-  },
-  filename: function (req, file, cb) {
-    // 生成唯一文件名
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
-  }
-});
+
+// Vercel 环境检测
+const isVercel = process.env.VERCEL === '1';
+
+// 适配 Vercel 的存储配置
+const storage = isVercel 
+  ? multer.memoryStorage() // Vercel 使用内存存储
+  : multer.diskStorage({
+      destination: function (req, file, cb) {
+        if (!fs.existsSync('uploads')) {
+          fs.mkdirSync('uploads', { recursive: true });
+        }
+        cb(null, 'uploads/');
+      },
+      filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, uniqueSuffix + '-' + file.originalname);
+      }
+    });
 
 // 文件过滤器
 const fileFilter = (req, file, cb) => {
-  // 只接受图片文件
   if (file.mimetype.startsWith('image/')) {
     cb(null, true);
   } else {
@@ -34,8 +37,8 @@ const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 限制 5MB
-    files: 1 // 一次只允许上传一个文件
+    fileSize: 5 * 1024 * 1024, // 5MB
+    files: 1
   }
 });
 
@@ -63,16 +66,18 @@ router.post('/test-upload', upload.single('file'), (req, res) => {
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
       size: req.file.size,
-      path: req.file.path
+      hasBuffer: !!req.file.buffer,
+      hasPath: !!req.file.path,
+      platform: isVercel ? 'Vercel' : 'Local'
     }
   });
   
-  // 清理测试文件
-  setTimeout(() => {
-    if (fs.existsSync(req.file.path)) {
+  // 清理测试文件（仅本地环境）
+  if (!isVercel && req.file?.path && fs.existsSync(req.file.path)) {
+    setTimeout(() => {
       fs.unlinkSync(req.file.path);
-    }
-  }, 1000);
+    }, 1000);
+  }
 });
 
 // 文本转模型
@@ -276,35 +281,49 @@ router.post('/upload/sts', (req, res) => {
     try {
       // 处理 multer 错误
       if (err instanceof multer.MulterError) {
+        console.error('Multer错误:', err);
         if (err.code === 'LIMIT_FILE_SIZE') {
           return res.status(413).json({ error: '文件大小超过限制（最大5MB）' });
         }
         return res.status(400).json({ error: err.message });
       } else if (err) {
+        console.error('其他上传错误:', err);
         return res.status(400).json({ error: err.message });
       }
 
       // 检查是否有文件上传
       if (!req.file) {
+        console.error('没有接收到文件，请求详情:', {
+          headers: req.headers,
+          body: req.body,
+          files: req.files
+        });
         return res.status(400).json({ error: '没有上传文件' });
       }
 
-      console.log('文件上传成功到临时目录:', {
-        path: req.file.path,
-        filename: req.file.originalname,
+      console.log('文件上传成功:', {
+        originalname: req.file.originalname,
         mimetype: req.file.mimetype,
-        size: req.file.size
+        size: req.file.size,
+        hasBuffer: !!req.file.buffer,
+        hasPath: !!req.file.path
       });
 
-      // 读取文件内容
-      const fileBuffer = fs.readFileSync(req.file.path);
+      // 获取文件数据：Vercel环境使用buffer，本地环境使用文件路径
+      const fileBuffer = isVercel ? req.file.buffer : fs.readFileSync(req.file.path);
       
+      if (!fileBuffer) {
+        throw new Error('无法获取文件数据');
+      }
+
       const formData = new FormData();
       formData.append('file', fileBuffer, {
         filename: req.file.originalname,
         contentType: req.file.mimetype,
         knownLength: fileBuffer.length
       });
+
+      console.log('准备上传到 Tripo STS...');
 
       // 上传到 Tripo STS
       const response = await axios.post('https://api.tripo3d.ai/v2/openapi/upload/sts', formData, {
@@ -313,19 +332,27 @@ router.post('/upload/sts', (req, res) => {
           ...formData.getHeaders()
         },
         maxContentLength: Infinity,
-        maxBodyLength: Infinity
+        maxBodyLength: Infinity,
+        timeout: 60000
       });
 
-      console.log('STS上传响应:', response.data);
+      console.log('STS上传成功:', response.data);
 
-      // 清理临时文件
-      // fs.unlinkSync(req.file.path);
+      // 清理临时文件（仅本地环境）
+      if (!isVercel && req.file?.path && fs.existsSync(req.file.path)) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (e) {
+          console.error('清理临时文件失败:', e);
+        }
+      }
+
       res.json(response.data);
     } catch (error) {
       console.error('STS上传错误:', error.response?.data || error.message);
       
-      // 清理临时文件
-      if (req.file?.path && fs.existsSync(req.file.path)) {
+      // 清理临时文件（仅本地环境）
+      if (!isVercel && req.file?.path && fs.existsSync(req.file.path)) {
         try {
           fs.unlinkSync(req.file.path);
         } catch (e) {
@@ -333,7 +360,6 @@ router.post('/upload/sts', (req, res) => {
         }
       }
       
-      // 返回详细的错误信息
       res.status(error.response?.status || 500).json({
         error: error.response?.data?.error || error.message,
         details: error.response?.data || null
