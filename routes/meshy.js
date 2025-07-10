@@ -5,10 +5,27 @@ const axios = require('axios');
 const MESHY_BASE_URL = 'https://api.meshy.ai';
 const MESHY_API_KEY = process.env.MESHY_API_KEY;
 
+// 参数验证函数
+const validateRequired = (obj, fields) => {
+  const missing = fields.filter(field => !obj || obj[field] === undefined || obj[field] === null);
+  if (missing.length > 0) {
+    throw new Error(`缺少必需参数: ${missing.join(', ')}`);
+  }
+};
+
 // 骨骼绑定
 router.post('/rig', async (req, res, next) => {
   try {
     const { model_url, height_meters = 1.8 } = req.body;
+    
+    // 验证必需参数
+    validateRequired(req.body, ['model_url']);
+
+    if (typeof height_meters !== 'number' || height_meters <= 0) {
+      return res.status(400).json({ 
+        error: 'height_meters 必须是正数' 
+      });
+    }
     
     console.log('创建骨骼绑定任务:', {
       model_url,
@@ -27,40 +44,58 @@ router.post('/rig', async (req, res, next) => {
       }
     });
 
+    if (!response.data) {
+      throw new Error('API返回空响应');
+    }
+
     console.log('Meshy API 骨骼绑定响应:', response.data);
     res.json(response.data);
   } catch (error) {
     console.error('骨骼绑定错误:', error.response?.data || error.message);
-    res.status(error.response?.status || 500).json({
-      error: error.response?.data?.error || error.message,
-      details: error.response?.data || null
-    });
+    next(error);
   }
 });
 
-// 绑定状态查询（保留作为备用）
+// 绑定状态查询
 router.get('/rig/status/:taskId', async (req, res, next) => {
   try {
-    const response = await axios.get(`${MESHY_BASE_URL}/openapi/v1/rigging/${req.params.taskId}`, {
+    const { taskId } = req.params;
+    
+    if (!taskId) {
+      return res.status(400).json({ 
+        error: '缺少 taskId 参数' 
+      });
+    }
+
+    console.log('查询绑定状态:', taskId);
+
+    const response = await axios.get(`${MESHY_BASE_URL}/openapi/v1/rigging/${taskId}`, {
       headers: {
         'Authorization': `Bearer ${MESHY_API_KEY}`
       }
     });
     
+    if (!response.data) {
+      throw new Error('API返回空响应');
+    }
+
     console.log('Meshy API 状态查询响应:', response.data);
     res.json(response.data);
   } catch (error) {
     console.error('状态查询错误:', error.response?.data || error.message);
-    res.status(error.response?.status || 500).json({
-      error: error.response?.data?.error || error.message,
-      details: error.response?.data || null
-    });
+    next(error);
   }
 });
 
-// 新增：流式获取绑定状态
+// 流式获取绑定状态
 router.get('/rig/stream/:taskId', async (req, res) => {
-  const taskId = req.params.taskId;
+  const { taskId } = req.params;
+  
+  if (!taskId) {
+    return res.status(400).json({ 
+      error: '缺少 taskId 参数' 
+    });
+  }
   
   console.log('开始流式监听绑定状态:', taskId);
   

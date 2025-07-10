@@ -111,6 +111,37 @@ if (!MESHY_API_KEY) {
   if (!isRailway) process.exit(1);
 }
 
+// 在路由之前添加请求验证中间件
+app.use('/api', (req, res, next) => {
+  // 记录请求详情
+  console.log('API请求:', {
+    method: req.method,
+    path: req.path,
+    params: req.params,
+    query: req.query,
+    body: req.method !== 'GET' ? req.body : undefined,
+    headers: {
+      'content-type': req.headers['content-type'],
+      'authorization': req.headers.authorization ? '***' : undefined
+    }
+  });
+  
+  // 验证API密钥是否配置
+  if (req.path.startsWith('/tripo') && !TRIPO_API_KEY) {
+    return res.status(500).json({
+      error: 'TRIPO_API_KEY 未配置'
+    });
+  }
+  
+  if (req.path.startsWith('/meshy') && !MESHY_API_KEY) {
+    return res.status(500).json({
+      error: 'MESHY_API_KEY 未配置'
+    });
+  }
+  
+  next();
+});
+
 // 默认路由
 app.get('/', (req, res) => {
   res.json({
