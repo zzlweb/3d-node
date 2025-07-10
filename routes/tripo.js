@@ -42,14 +42,6 @@ const upload = multer({
 const TRIPO_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
 const TRIPO_API_KEY = process.env.TRIPO_API_KEY;
 
-// 在文件开头添加参数验证函数
-const validateRequired = (obj, fields) => {
-  const missing = fields.filter(field => !obj || obj[field] === undefined || obj[field] === null);
-  if (missing.length > 0) {
-    throw new Error(`缺少必需参数: ${missing.join(', ')}`);
-  }
-};
-
 // 测试文件上传路由
 router.post('/test-upload', upload.single('file'), (req, res) => {
   console.log('测试上传接收到的请求');
@@ -110,8 +102,15 @@ router.post('/create-task', async (req, res, next) => {
     const { type, file, ...options } = req.body;
 
     // 验证必需参数
-    validateRequired(req.body, ['type']);
-    validateRequired(file, ['file_token', 'type']);
+    if (!type) {
+      return res.status(400).json({ error: '缺少 type 参数' });
+    }
+
+    if (!file || !file.file_token || !file.type) {
+      return res.status(400).json({ 
+        error: '缺少 file 参数或 file.file_token/file.type' 
+      });
+    }
 
     console.log('创建任务请求:', {
       type,
@@ -135,16 +134,14 @@ router.post('/create-task', async (req, res, next) => {
       }
     });
 
-    // 验证响应
-    if (!response.data) {
-      throw new Error('API返回空响应');
-    }
-
     console.log('Tripo API 创建任务响应:', response.data);
     res.json(response.data);
   } catch (error) {
     console.error('创建任务错误:', error.response?.data || error.message);
-    next(error);
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data?.error || error.message,
+      details: error.response?.data || null
+    });
   }
 });
 
@@ -179,20 +176,25 @@ router.post('/multiview-to-model-with-tokens', async (req, res, next) => {
     const { type, files, ...options } = req.body;
 
     // 验证必需参数
-    validateRequired(req.body, ['type', 'files']);
+    if (!type || type !== 'multiview_to_model') {
+      return res.status(400).json({ error: '类型必须是 multiview_to_model' });
+    }
 
-    if (!Array.isArray(files) || files.length === 0) {
+    if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({ 
-        error: 'files 必须是非空数组' 
+        error: '缺少 files 参数或 files 不是数组' 
       });
     }
 
-    // 验证每个文件参数
-    files.forEach((file, i) => {
-      if (!file || !file.file_token || !file.type) {
-        throw new Error(`文件 ${i} 缺少 file_token 或 type`);
+    // 验证每个文件是否有必需的字段
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file.file_token || !file.type) {
+        return res.status(400).json({ 
+          error: `文件 ${i} 缺少 file_token 或 type` 
+        });
       }
-    });
+    }
 
     console.log('创建多视角任务请求:', {
       type,
@@ -213,47 +215,27 @@ router.post('/multiview-to-model-with-tokens', async (req, res, next) => {
       }
     });
 
-    if (!response.data) {
-      throw new Error('API返回空响应');
-    }
-
     console.log('Tripo API 多视角任务创建响应:', response.data);
     res.json(response.data);
   } catch (error) {
     console.error('创建多视角任务错误:', error.response?.data || error.message);
-    next(error);
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data?.error || error.message,
+      details: error.response?.data || null
+    });
   }
 });
 
 // 查询任务状态
 router.get('/status/:taskId', async (req, res, next) => {
   try {
-    const { taskId } = req.params;
-    
-    // 验证参数
-    if (!taskId) {
-      return res.status(400).json({ 
-        error: '缺少 taskId 参数' 
-      });
-    }
-
-    console.log('查询任务状态:', taskId);
-
-    const response = await axios.get(`${TRIPO_BASE_URL}/task/${taskId}`, {
+    const response = await axios.get(`${TRIPO_BASE_URL}/task/${req.params.taskId}`, {
       headers: {
         'Authorization': `Bearer ${TRIPO_API_KEY}`
       }
     });
-
-    // 验证响应数据
-    if (!response.data) {
-      throw new Error('API返回空响应');
-    }
-
-    console.log('任务状态响应:', response.data);
     res.json(response.data);
   } catch (error) {
-    console.error('查询任务状态错误:', error.message);
     next(error);
   }
 });
